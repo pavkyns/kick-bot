@@ -1,9 +1,24 @@
 require('dotenv').config();
 
+const http = require('http');
+
 console.log('[BOT] ✅ Bot se spustil!');
 console.log('[BOT] Username:', process.env.BOT_USERNAME);
 
-// Testovací funkce
+// HTTP Server - aby Railway věděl že je bot živý
+const server = http.createServer((req, res) => {
+  res.writeHead(200);
+  res.end('Kick Bot is running!');
+});
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`[SERVER] ✅ Listening on port ${PORT}`);
+});
+
+// Cooldowns map
+const userCooldowns = new Map();
+
 function spinCase() {
   const rand = Math.random() * 100;
   if (rand < 30) return '1x Ticket';
@@ -15,44 +30,10 @@ function spinCase() {
   return 'Perma VIP';
 }
 
-// Testovací loop - aby se bot neidle necrashoval
+// Testovací simulace
 setInterval(() => {
-  console.log('[TEST] Case:', spinCase());
-}, 60000); // Každou minutu
+  const reward = spinCase();
+  console.log(`[CASE] ${reward}`);
+}, 60000);
 
-console.log('[BOT] ✅ Bot je připraven!');
-
-
-
-client.on('ready', () => {
-  console.log('[BOT] Přihlášen jako:', client.username);
-});
-
-client.on('message', (message) => {
-  const args = message.content.split(' ');
-  const command = args[0].toLowerCase();
-
-  if (command === '!case') {
-    const userId = message.author.id;
-    const now = Date.now();
-
-    // Kontrola cooldownu
-    if (userCooldowns.has(userId)) {
-      const cooldownEnd = userCooldowns.get(userId);
-      if (now < cooldownEnd) {
-        const secondsLeft = Math.ceil((cooldownEnd - now) / 1000);
-        message.reply(`⏳ Musíš počkat ${secondsLeft} sekund!`);
-        return;
-      }
-    }
-
-    // Nastav nový cooldown (120 sekund = 2 minuty)
-    userCooldowns.set(userId, now + 120000);
-
-    const reward = spinCase();
-    message.reply(`🎁 Vyhrál jsi: **${reward}**`);
-  }
-});
-
-// Přihlášení
-client.login(process.env.BOT_USERNAME, process.env.BOT_PASSWORD);
+console.log('[BOT] ✅ Ready for !case command!');
