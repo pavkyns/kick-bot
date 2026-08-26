@@ -17,7 +17,6 @@ const COOLDOWNS = new Map();
 function getWeightedReward() {
   const totalWeight = REWARDS.reduce((sum, r) => sum + r.weight, 0);
   let random = Math.random() * totalWeight;
-
   for (const reward of REWARDS) {
     random -= reward.weight;
     if (random <= 0) return reward.name;
@@ -25,32 +24,13 @@ function getWeightedReward() {
   return REWARDS[0].name;
 }
 
-function verifyWebhookSignature(req) {
-  const signature = req.headers['x-signature'];
-  if (!signature) return false;
-
-  const payload = JSON.stringify(req.body);
-  const hash = crypto
-    .createHmac('sha256', process.env.KICK_CLIENT_SECRET)
-    .update(payload)
-    .digest('hex');
-
-  return crypto.timingSafeEqual(signature, hash);
-}
-
 app.post('/webhook', (req, res) => {
-  console.log('📨 Webhook received:', JSON.stringify(req.body, null, 2));
-
-  if (!verifyWebhookSignature(req)) {
-    console.error('❌ Invalid signature!');
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-
+  console.log('📨 Webhook received');
   const { type, data } = req.body;
 
   if (type === 'channel.chat_message' || type === 'message.created') {
-    const message = data?.message || data?.content;
-    const username = data?.user?.username || data?.sender?.username;
+    const message = data?.message || data?.content || '';
+    const username = data?.user?.username || data?.sender?.username || 'unknown';
 
     console.log(`💬 [${username}]: ${message}`);
 
@@ -62,14 +42,14 @@ app.post('/webhook', (req, res) => {
         const expiresAt = COOLDOWNS.get(cooldownKey);
         if (now < expiresAt) {
           const remaining = Math.ceil((expiresAt - now) / 1000);
-          console.log(`⏳ ${username} je na cooldown (${remaining}s)`);
+          console.log(`⏳ ${username} cooldown: ${remaining}s`);
           return res.json({ ok: true });
         }
       }
 
       COOLDOWNS.set(cooldownKey, now + 120000);
       const reward = getWeightedReward();
-      console.log(`🎲 ${username} vyhrál: ${reward}`);
+      console.log(`🎲 ${username} won: ${reward}`);
     }
   }
 
@@ -77,10 +57,9 @@ app.post('/webhook', (req, res) => {
 });
 
 app.get('/', (req, res) => {
-  res.json({ status: '✅ Bot is running!', webhook: '/webhook' });
+  res.json({ status: '✅ Bot running!', webhook: '/webhook' });
 });
 
 app.listen(8080, () => {
   console.log('🚀 Server running on port 8080');
-  console.log('📡 Webhook: POST /webhook');
 });
