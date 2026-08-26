@@ -1,7 +1,8 @@
 require('dotenv').config();
-const net = require('net');
 const http = require('http');
 const express = require('express');
+const axios = require('axios');
+const WebSocket = require('ws');
 
 const app = express();
 app.use(express.json());
@@ -14,8 +15,10 @@ console.log('[BOT] Bot Username:', process.env.BOT_USERNAME);
 const userCooldowns = new Map();
 const COOLDOWN_MS = 120000; // 120 sekund
 
-let ircSocket = null;
-let ircConnected = false;
+let ws = null;
+let userId = null;
+let channelId = null;
+let chatRoomId = null;
 
 function spinCase() {
   const rand = Math.random() * 100;
@@ -28,62 +31,141 @@ function spinCase() {
   return 'Perma VIP';
 }
 
-// IRC CONNECTION
-function connectIRC() {
-  console.log('[IRC] 🔌 Connecting to Kick IRC...');
-  
-  ircSocket = net.createConnection({
-    host: 'irc.kick.com',
-    port: 6667
-  });
-
-  ircSocket.on('connect', () => {
-    console.log('[IRC] ✅ Connected!');
+// Get Channel ID from Kick API
+async function getChannelInfo() {
+  try {
+    console.log('[API] 🔍 Getting channel info...');
+    const response = await axios.get(
+      `https://kick.com/api/v2/channels/${process.env.KICK_CHANNEL}`
+    );
     
-    // IRC Login
-    ircSocket.write(`NICK ${process.env.BOT_USERNAME}\r\n`);
-    ircSocket.write(`USER ${process.env.BOT_USERNAME} 0 * :${process.env.BOT_USERNAME}\r\n`);
-    ircSocket.write(`PASS ${process.env.BOT_PASSWORD}\r\n`);
-  });
-
-  ircSocket.on('data', (data) => {
-    const message = data.toString();
-    console.log('[IRC RAW]', message);
-
-    if (message.includes('001')) { // Connected
-      console.log('[IRC] ✅ Logged in! Joining channel...');
-      ircSocket.write(`JOIN #${process.env.KICK_CHANNEL}\r\n`);
-      ircConnected = true;
-    }
-
-    if (message.includes('PING')) {
-      const token = message.split('PING :')[1].trim();
-      ircSocket.write(`PONG :${token}\r\n`);
-    }
-  });
-
-  ircSocket.on('error', (error) => {
-    console.error('[IRC] ❌ Error:', error.message);
-    ircConnected = false;
-  });
-
-  ircSocket.on('end', () => {
-    console.log('[IRC] 🔌 Disconnected');
-    ircConnected = false;
-    setTimeout(() => connectIRC(), 5000); // Reconnect
-  });
+    const data = response.data.channel || response.data;
+    channelId = data.id;
+    chatRoomId = data.chatroom?.id;
+    
+    console.log('[API] ✅ Channel ID:', channelId);
+    console.log('[API] ✅ ChatRoom ID:', chatRoomId);
+    
+    return { channelId, chatRoomId };
+  } catch (error) {
+    console.error('[API] ❌ Error getting channel info:', error.message);
+    return null;
+  }
 }
 
-// SEND CHAT MESSAGE
+// Connect to Kick WebSocket
+async function connectWebSocket() {
+  try {
+    const channelInfo = await getChannelInfo();
+    if (!channelInfo) {
+      console.error('[WS] ❌ Could not get channel info');
+      setTimeout(() => connectWebSocket(), 5000);
+      return;
+    }
+
+    console.log('[WS] 🔌 Connecting to Kick WebSocket...');
+    
+    ws = new WebSocket('wss://ws-global.kick.com/');
+
+    ws.on('open', () => {
+      console.log('[WS] ✅ Connected to WebSocket!');
+      
+      // Subscribe to channel
+      ws.send(JSON.stringify({
+        event: 'pusher:subscribe',
+        data: {
+          channel: `chatrooms.${chatRoomId}.v2`
+        }
+      }));
+    });
+
+    ws.on('message', (data) => {
+      try {
+        const message = JSON.parse(data);
+        
+        if (message.event === 'pusher:subscription_succeeded') {
+          console.log('[WS] ✅ Subscribed to chat!');
+        }
+
+        // Listen for chat messages
+        if (message.event === 'App\\Events\\ChatMessageCreated') {
+          const chatData = JSON.parse(message.data);
+          const username = chatData.sender?.username || 'Unknown';
+          const content = chatData.content || '';
+
+          console.log(`[CHAT] ${username}: ${content}`);
+
+          // Check for !case command
+          if (content.toLowerCase().includes('!case')) {
+            handleCase(username);
+          }
+        }
+      } catch (e) {
+        // Ignore parse errors
+      }
+    });
+
+    ws.on('error', (error) => {
+      console.error('[WS] ❌ Error:', error.message);
+    });
+
+    ws.on('close', () => {
+      console.log('[WS] 🔌 Disconnected');
+      setTimeout(() => connectWebSocket(), 5000);
+    });
+  } catch (error) {
+    console.error('[WS] ❌ Connection error:', error.message);
+    setTimeout(() => connectWebSocket(), 5000);
+  }
+}
+
+// Handle !case command
+function handleCase(username) {
+  // Cooldown check
+  if (userCooldowns.has(username)) {
+    const expirationTime = userCooldowns.get(username) + COOLDOWN_MS;
+    if (Date.now() < expirationTime) {
+      const remainingMs = expirationTime - Date.now();
+      console.log(`[COOLDOWN] ${username} musí čekat ${Math.ceil(remainingMs / 1000)}s`);
+      return;
+    }
+  }
+
+  // Spin case
+  const reward = spinCase();
+  userCooldowns.set(username, Date.now());
+
+  const chatMsg = `@${username} Vyhrál jsi: ${reward}! 🎉`;
+  console.log(`[CASE] ${chatMsg}`);
+  
+  // Send to chat
+  sendChatMessage(chatMsg);
+}
+
+// Send Chat Message
 function sendChatMessage(message) {
-  if (!ircConnected || !ircSocket) {
-    console.error('[IRC] ❌ Not connected to IRC!');
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    console.error('[WS] ❌ WebSocket not connected!');
     return;
   }
 
-  const msg = `PRIVMSG #${process.env.KICK_CHANNEL} :${message}\r\n`;
-  console.log('[IRC SEND]', msg);
-  ircSocket.write(msg);
+  // Kick API endpoint for sending messages
+  axios.post(
+    `https://kick.com/api/v2/channels/${process.env.KICK_CHANNEL}/messages`,
+    {
+      content: message
+    },
+    {
+      headers: {
+        'Authorization': `Bearer ${process.env.KICK_CLIENT_ID}`,
+        'Content-Type': 'application/json'
+      }
+    }
+  ).then(() => {
+    console.log('[API] ✅ Message sent!');
+  }).catch((error) => {
+    console.error('[API] ❌ Error sending message:', error.message);
+  });
 }
 
 // WEBHOOK ENDPOINT
@@ -102,33 +184,7 @@ app.post('/webhook', (req, res) => {
 
       // Check for !case command
       if (message.toLowerCase().includes('!case')) {
-        // Cooldown check
-        if (userCooldowns.has(username)) {
-          const expirationTime = userCooldowns.get(username) + COOLDOWN_MS;
-          if (Date.now() < expirationTime) {
-            const remainingMs = expirationTime - Date.now();
-            console.log(`[COOLDOWN] ${username} musí čekat ${Math.ceil(remainingMs / 1000)}s`);
-            res.status(200).json({ status: 'on_cooldown' });
-            return;
-          }
-        }
-
-        // Spin case
-        const reward = spinCase();
-        userCooldowns.set(username, Date.now());
-
-        const chatMsg = `@${username} Vyhrál jsi: ${reward}! 🎉`;
-        console.log(`[CASE] ${chatMsg}`);
-        
-        // Send to chat
-        sendChatMessage(chatMsg);
-        
-        res.status(200).json({ 
-          status: 'success',
-          reward: reward,
-          user: username
-        });
-        return;
+        handleCase(username);
       }
     }
 
@@ -150,5 +206,5 @@ app.listen(PORT, () => {
   console.log(`[WEBHOOK] 📍 https://kick-bot-production-408a.up.railway.app/webhook`);
 });
 
-// Connect IRC on startup
-setTimeout(() => connectIRC(), 2000);
+// Connect WebSocket on startup
+setTimeout(() => connectWebSocket(), 2000);
