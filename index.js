@@ -1,8 +1,9 @@
 require('dotenv').config();
-const irc = require('irc');
 const express = require('express');
+const crypto = require('crypto');
 
 const app = express();
+app.use(express.json());
 
 const REWARDS = [
   { name: '1x Ticket', weight: 60 },
@@ -24,55 +25,70 @@ function getWeightedReward() {
   return REWARDS[0].name;
 }
 
-const client = new irc.Client('irc.kick.com', process.env.BOT_USERNAME, {
-  port: 6667,
-  secure: false,
-  channels: [`#${process.env.KICK_CHANNEL}`],
-  password: process.env.BOT_PASSWORD,
-  userName: process.env.BOT_USERNAME,
-  realName: 'Case Bot',
-  autoRejoin: true,
-  autoConnect: true,
-  retryCount: 999,
-  retryDelay: 2000,
-});
+function verifyWebhookSignature(req) {
+  const signature = req.headers['x-signature'];
+  if (!signature) return false;
 
-client.addListener('registered', () => {
-  console.log('✅ Connected to Kick IRC!');
-});
+  const payload = JSON.stringify(req.body);
+  const hash = crypto
+    .createHmac('sha256', process.env.KICK_CLIENT_SECRET)
+    .update(payload)
+    .digest('hex');
 
-client.addListener('message', (from, to, text, message) => {
-  console.log(`📨 [${from}]: ${text}`);
+  return crypto.timingSafeEqual(signature, hash);
+}
 
-  if (text.toLowerCase().includes('!case')) {
-    const now = Date.now();
-    const cooldownKey = `case_${from}`;
+// Webhook от Kick
+app.post('/webhook', (req, res) => {
+  console.log('📨 Webhook received:', JSON.stringify(req.body, null, 2));
 
-    if (COOLDOWNS.has(cooldownKey)) {
-      const expiresAt = COOLDOWNS.get(cooldownKey);
-      if (now < expiresAt) {
-        const remaining = Math.ceil((expiresAt - now) / 1000);
-        console.log(`⏳ ${from} je na cooldown (${remaining}s)`);
-        return;
-      }
-    }
-
-    COOLDOWNS.set(cooldownKey, now + 120000);
-    const reward = getWeightedReward();
-    
-    console.log(`🎲 ${from} vyhrál: ${reward}`);
-    client.say(to, `@${from} Vyhrál jsi: ${reward}! 🎉`);
+  // Verify signature
+  if (!verifyWebhookSignature(req)) {
+    console.error('❌ Invalid signature!');
+    return res.status(401).json({ error: 'Unauthorized' });
   }
-});
 
-client.addListener('error', (message) => {
-  console.error('❌ IRC Error:', message);
+  const { type, data } = req.body;
+
+  // Chat message event
+  if (type === 'channel.chat_message' || type === 'message.created') {
+    const message = data?.message || data?.content;
+    const username = data?.user?.username || data?.sender?.username;
+    const channelId = data?.channel?.id;
+
+    console.log(`💬 [${username}]: ${message}`);
+
+    if (message.toLowerCase().includes('!case')) {
+      const now = Date.now();
+      const cooldownKey = `case_${username}`;
+
+      if (COOLDOWNS.has(cooldownKey)) {
+        const expiresAt = COOLDOWNS.get(cooldownKey);
+        if (now < expiresAt) {
+          const remaining = Math.ceil((expiresAt - now) / 1000);
+          console.log(`⏳ ${username} je na cooldown (${remaining}s)`);
+          return res.json({ ok: true });
+        }
+      }
+
+      COOLDOWNS.set(cooldownKey, now + 120000);
+      const reward = getWeightedReward();
+
+      console.log(`🎲 ${username} vyhrál: ${reward}`);
+
+      // TODO: Zde pošli message zpátky na Kick chat
+      // Bude potřeba API endpoint pro psaní zpráv
+    }
+  }
+
+  res.json({ ok: true });
 });
 
 app.get('/', (req, res) => {
-  res.json({ status: '✅ Bot is running!' });
+  res.json({ status: '✅ Bot is running!', webhook: '/webhook' });
 });
 
 app.listen(8080, () => {
   console.log('🚀 Server running on port 8080');
+  console.log('📡 Webhook: POST /webhook');
 });
