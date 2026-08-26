@@ -1,13 +1,15 @@
 require('dotenv').config();
-const { Kick } = require('kick.js');
 
-const client = new Kick();
+//简化pro testování bez kick.js
+console.log('[BOT] Bot je online!');
+console.log('[BOT] Username:', process.env.BOT_USERNAME);
+console.log('[BOT] Ready for commands!');
+
+// Placeholder kód
 const userCooldowns = new Map();
 
-// Funkce pro výběr případu
 function spinCase() {
   const rand = Math.random() * 100;
-  
   if (rand < 30) return '1x Ticket';
   if (rand < 55) return '2x Ticket';
   if (rand < 75) return '5x Ticket';
@@ -16,6 +18,9 @@ function spinCase() {
   if (rand < 99) return '7 Day VIP';
   return 'Perma VIP';
 }
+
+console.log('[TEST] Case spin test:', spinCase());
+
 
 client.on('ready', () => {
   console.log('[BOT] Přihlášen jako:', client.username);
