@@ -1,81 +1,51 @@
 require('dotenv').config();
-const { KickClient } = require('kick.js');
+const { Kick } = require('kick.js');
 
-const client = new KickClient();
-const PREFIX = '!';
-const COOLDOWN_TIME = 120000;
-
+const client = new Kick();
 const userCooldowns = new Map();
 
-const caseRewards = {
-  1: { chance: 30, reward: '1x Ticket do giveaway', emoji: '🎫' },
-  2: { chance: 25, reward: '2x Ticket do giveaway', emoji: '🎫🎫' },
-  3: { chance: 15, reward: '500 Pepe coins', emoji: '💰' },
-  4: { chance: 10, reward: '1000 Pepe coins', emoji: '💰💰' },
-  5: { chance: 8, reward: 'VIP role na 1 měsíc', emoji: '👑' },
-  6: { chance: 5, reward: 'Custom role', emoji: '✨' },
-  7: { chance: 3, reward: '5000 Pepe coins + Ticket', emoji: '💎' },
-  8: { chance: 2, reward: 'Moderator na 1 měsíc', emoji: '🔨' },
-  9: { chance: 1, reward: 'Vlastní emote na serveru', emoji: '🌟' },
-  10: { chance: 1, reward: 'Perma VIP role', emoji: '👑✨' }
-};
-
+// Funkce pro výběr případu
 function spinCase() {
-  const random = Math.random() * 100;
-  let accumulated = 0;
-
-  for (let num = 1; num <= 10; num++) {
-    accumulated += caseRewards[num].chance;
-    if (random <= accumulated) {
-      return num;
-    }
-  }
-  return 10;
+  const rand = Math.random() * 100;
+  
+  if (rand < 30) return '1x Ticket';
+  if (rand < 55) return '2x Ticket';
+  if (rand < 75) return '5x Ticket';
+  if (rand < 88) return '10x Ticket';
+  if (rand < 96) return 'VIP Day';
+  if (rand < 99) return '7 Day VIP';
+  return 'Perma VIP';
 }
 
-function checkCooldown(userId) {
-  const now = Date.now();
-  const userLastUse = userCooldowns.get(userId);
-
-  if (userLastUse && now - userLastUse < COOLDOWN_TIME) {
-    const remainingSeconds = Math.ceil((COOLDOWN_TIME - (now - userLastUse)) / 1000);
-    return {
-      onCooldown: true,
-      remaining: remainingSeconds
-    };
-  }
-
-  userCooldowns.set(userId, now);
-  return { onCooldown: false };
-}
+client.on('ready', () => {
+  console.log('[BOT] Přihlášen jako:', client.username);
+});
 
 client.on('message', (message) => {
   const args = message.content.split(' ');
   const command = args[0].toLowerCase();
 
-  if (command === `${PREFIX}case`) {
-    const username = message.author.username;
+  if (command === '!case') {
     const userId = message.author.id;
+    const now = Date.now();
 
-    const cooldownCheck = checkCooldown(userId);
-    if (cooldownCheck.onCooldown) {
-      client.chat.sendMessage(
-        `@${username} Musíš počkat ${cooldownCheck.remaining}s! ⏱️`,
-        message.channel.id
-      );
-      return;
+    // Kontrola cooldownu
+    if (userCooldowns.has(userId)) {
+      const cooldownEnd = userCooldowns.get(userId);
+      if (now < cooldownEnd) {
+        const secondsLeft = Math.ceil((cooldownEnd - now) / 1000);
+        message.reply(`⏳ Musíš počkat ${secondsLeft} sekund!`);
+        return;
+      }
     }
 
-    const winNumber = spinCase();
-    const reward = caseRewards[winNumber];
+    // Nastav nový cooldown (120 sekund = 2 minuty)
+    userCooldowns.set(userId, now + 120000);
 
-    const responseMessage = `${username} ${reward.emoji} Padlo ti číslo: ${winNumber} (šance: ${reward.chance}%) Výhra: ${reward.reward} 🎉`;
-    
-    client.chat.sendMessage(responseMessage, message.channel.id);
+    const reward = spinCase();
+    message.reply(`🎁 Vyhrál jsi: **${reward}**`);
   }
 });
 
-client.login({
-  username: process.env.BOT_USERNAME,
-  password: process.env.BOT_PASSWORD
-});
+// Přihlášení
+client.login(process.env.BOT_USERNAME, process.env.BOT_PASSWORD);
