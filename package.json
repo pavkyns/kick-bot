@@ -1,13 +1,9 @@
 {
   "name": "kick-bot",
   "version": "1.0.0",
-  "description": "Kick case bot",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
-  },
-  "engines": {
-    "node": "18.x"
   },
   "dependencies": {
     "dotenv": "^16.0.3"
