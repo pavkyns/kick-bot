@@ -1,5 +1,4 @@
 require('dotenv').config();
-const http = require('http');
 const express = require('express');
 const axios = require('axios');
 const WebSocket = require('ws');
@@ -7,204 +6,128 @@ const WebSocket = require('ws');
 const app = express();
 app.use(express.json());
 
-console.log('[BOT] ✅ Bot se spustil!');
-console.log('[BOT] Channel:', process.env.KICK_CHANNEL);
-console.log('[BOT] Bot Username:', process.env.BOT_USERNAME);
+// Logy pro debugging
+console.log('🤖 BOT STARTING...');
+console.log('KICK_CLIENT_ID:', process.env.KICK_CLIENT_ID ? '✅' : '❌');
+console.log('KICK_CLIENT_SECRET:', process.env.KICK_CLIENT_SECRET ? '✅' : '❌');
+console.log('KICK_CHANNEL:', process.env.KICK_CHANNEL);
+console.log('BOT_USERNAME:', process.env.BOT_USERNAME);
 
-// Cooldowns
-const userCooldowns = new Map();
-const COOLDOWN_MS = 120000; // 120 sekund
-
-let ws = null;
-let userId = null;
-let channelId = null;
 let chatRoomId = null;
+let accessToken = null;
 
-function spinCase() {
-  const rand = Math.random() * 100;
-  if (rand < 30) return '1x Ticket';
-  if (rand < 55) return '2x Ticket';
-  if (rand < 75) return '5x Ticket';
-  if (rand < 88) return '10x Ticket';
-  if (rand < 96) return 'VIP Day';
-  if (rand < 99) return '7 Day VIP';
-  return 'Perma VIP';
-}
-
-// Get Channel ID from Kick API
+// 1️⃣ Získej Channel Info
 async function getChannelInfo() {
   try {
-    console.log('[API] 🔍 Getting channel info...');
-    const response = await axios.get(
-      `https://kick.com/api/v2/channels/${process.env.KICK_CHANNEL}`
-    );
-    
-    const data = response.data.channel || response.data;
-    channelId = data.id;
-    chatRoomId = data.chatroom?.id;
-    
-    console.log('[API] ✅ Channel ID:', channelId);
-    console.log('[API] ✅ ChatRoom ID:', chatRoomId);
-    
-    return { channelId, chatRoomId };
+    console.log('📡 Fetching channel info...');
+    const response = await axios.get(`https://kick.com/api/v2/channels/${process.env.KICK_CHANNEL}`);
+    chatRoomId = response.data.chatroom.id;
+    console.log('✅ Channel ID:', response.data.id);
+    console.log('✅ ChatRoom ID:', chatRoomId);
+    console.log('✅ Full response:', JSON.stringify(response.data, null, 2));
   } catch (error) {
-    console.error('[API] ❌ Error getting channel info:', error.message);
-    return null;
+    console.error('❌ Error fetching channel:', error.message);
   }
 }
 
-// Connect to Kick WebSocket
+// 2️⃣ Získej Access Token
+async function getAccessToken() {
+  try {
+    console.log('🔐 Getting access token...');
+    const response = await axios.post('https://kick.com/api/v2/oauth/token', {
+      grant_type: 'client_credentials',
+      client_id: process.env.KICK_CLIENT_ID,
+      client_secret: process.env.KICK_CLIENT_SECRET,
+    });
+    accessToken = response.data.access_token;
+    console.log('✅ Access token obtained');
+  } catch (error) {
+    console.error('❌ Error getting token:', error.message);
+  }
+}
+
+// 3️⃣ Pošli zprávu
+async function sendMessage(message) {
+  try {
+    console.log(`📤 Sending message: ${message}`);
+    const response = await axios.post(
+      `https://kick.com/api/v2/channels/${process.env.KICK_CHANNEL}/messages`,
+      { content: message },
+      {
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+    console.log('✅ Message sent!');
+  } catch (error) {
+    console.error('❌ Error sending message:', error.response?.data || error.message);
+  }
+}
+
+// 4️⃣ WebSocket Connection
 async function connectWebSocket() {
   try {
-    const channelInfo = await getChannelInfo();
-    if (!channelInfo) {
-      console.error('[WS] ❌ Could not get channel info');
-      setTimeout(() => connectWebSocket(), 5000);
-      return;
-    }
-
-    console.log('[WS] 🔌 Connecting to Kick WebSocket...');
-    
-    ws = new WebSocket('wss://ws-global.kick.com/');
+    console.log('🔗 Connecting to WebSocket...');
+    const ws = new WebSocket('wss://ws-global.kick.com/');
 
     ws.on('open', () => {
-      console.log('[WS] ✅ Connected to WebSocket!');
-      
-      // Subscribe to channel
-      ws.send(JSON.stringify({
+      console.log('✅ WebSocket connected!');
+      // Subscribe to chatroom
+      const subscribe = {
         event: 'pusher:subscribe',
         data: {
-          channel: `chatrooms.${chatRoomId}.v2`
-        }
-      }));
+          channel: `chatrooms.${chatRoomId}.v2`,
+        },
+      };
+      ws.send(JSON.stringify(subscribe));
+      console.log('📢 Subscribed to channel');
     });
 
     ws.on('message', (data) => {
       try {
         const message = JSON.parse(data);
-        
-        if (message.event === 'pusher:subscription_succeeded') {
-          console.log('[WS] ✅ Subscribed to chat!');
-        }
+        console.log('📨 Received:', JSON.stringify(message, null, 2));
 
-        // Listen for chat messages
-        if (message.event === 'App\\Events\\ChatMessageCreated') {
-          const chatData = JSON.parse(message.data);
-          const username = chatData.sender?.username || 'Unknown';
-          const content = chatData.content || '';
-
-          console.log(`[CHAT] ${username}: ${content}`);
-
-          // Check for !case command
-          if (content.toLowerCase().includes('!case')) {
-            handleCase(username);
+        if (message.data && message.data.content) {
+          const content = message.data.content;
+          if (content.includes('!case')) {
+            console.log('🎲 !case command detected!');
+            sendMessage('@user Vyhrál jsi: 1x Ticket! 🎉');
           }
         }
       } catch (e) {
-        // Ignore parse errors
+        console.log('Raw message:', data);
       }
     });
 
     ws.on('error', (error) => {
-      console.error('[WS] ❌ Error:', error.message);
+      console.error('❌ WebSocket error:', error);
     });
 
     ws.on('close', () => {
-      console.log('[WS] 🔌 Disconnected');
-      setTimeout(() => connectWebSocket(), 5000);
+      console.log('⚠️ WebSocket closed');
+      setTimeout(connectWebSocket, 5000);
     });
   } catch (error) {
-    console.error('[WS] ❌ Connection error:', error.message);
-    setTimeout(() => connectWebSocket(), 5000);
+    console.error('❌ Error connecting WebSocket:', error.message);
   }
 }
 
-// Handle !case command
-function handleCase(username) {
-  // Cooldown check
-  if (userCooldowns.has(username)) {
-    const expirationTime = userCooldowns.get(username) + COOLDOWN_MS;
-    if (Date.now() < expirationTime) {
-      const remainingMs = expirationTime - Date.now();
-      console.log(`[COOLDOWN] ${username} musí čekat ${Math.ceil(remainingMs / 1000)}s`);
-      return;
-    }
-  }
-
-  // Spin case
-  const reward = spinCase();
-  userCooldowns.set(username, Date.now());
-
-  const chatMsg = `@${username} Vyhrál jsi: ${reward}! 🎉`;
-  console.log(`[CASE] ${chatMsg}`);
-  
-  // Send to chat
-  sendChatMessage(chatMsg);
+// 5️⃣ Start Bot
+async function startBot() {
+  await getChannelInfo();
+  await getAccessToken();
+  await connectWebSocket();
 }
 
-// Send Chat Message
-function sendChatMessage(message) {
-  if (!ws || ws.readyState !== WebSocket.OPEN) {
-    console.error('[WS] ❌ WebSocket not connected!');
-    return;
-  }
-
-  // Kick API endpoint for sending messages
-  axios.post(
-    `https://kick.com/api/v2/channels/${process.env.KICK_CHANNEL}/messages`,
-    {
-      content: message
-    },
-    {
-      headers: {
-        'Authorization': `Bearer ${process.env.KICK_CLIENT_ID}`,
-        'Content-Type': 'application/json'
-      }
-    }
-  ).then(() => {
-    console.log('[API] ✅ Message sent!');
-  }).catch((error) => {
-    console.error('[API] ❌ Error sending message:', error.message);
-  });
-}
-
-// WEBHOOK ENDPOINT
-app.post('/webhook', (req, res) => {
-  try {
-    const { type, data } = req.body;
-
-    console.log('[WEBHOOK] Přijata zpráva:', type);
-
-    // Chat message event
-    if (type === 'message' || type === 'chat_message') {
-      const message = data.message || data.content || '';
-      const username = data.sender?.username || data.user?.username || 'Unknown';
-
-      console.log(`[CHAT] ${username}: ${message}`);
-
-      // Check for !case command
-      if (message.toLowerCase().includes('!case')) {
-        handleCase(username);
-      }
-    }
-
-    res.status(200).json({ status: 'ok' });
-  } catch (error) {
-    console.error('[ERROR] Webhook error:', error.message);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Health check
+// 6️⃣ Express Server
 app.get('/', (req, res) => {
-  res.status(200).json({ status: 'Kick Bot Running!' });
+  res.send('✅ Bot is running!');
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`[SERVER] ✅ Listening on port ${PORT}`);
-  console.log(`[WEBHOOK] 📍 https://kick-bot-production-408a.up.railway.app/webhook`);
+app.listen(8080, () => {
+  console.log('🚀 Server running on port 8080');
+  startBot();
 });
-
-// Connect WebSocket on startup
-setTimeout(() => connectWebSocket(), 2000);
